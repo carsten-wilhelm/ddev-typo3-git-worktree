@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Generate worktree-specific TYPO3 site base URL configuration.
+## Usage: generate-worktree-site-config [worktree-folder-name]
+## Example: "ddev generate-worktree-site-config my-folder"
+## MutagenSync: true
+
+set -euo pipefail
+
+# define TYPOI3 context
+if [ -z "${TYPO3_CONTEXT-}" ]; then
+	TYPO3_CONTEXT="Development/DDEV"
+fi
+
+# identify TYPO3 folder using composer_root setting
+DDEV_TYPO3_ROOT=$DDEV_APPROOT/$(awk '/^[:space:]*composer_root/ {print $2}' $DDEV_APPROOT/.ddev/config.yaml)
+DDEV_TYPO3_ROOT=${DDEV_TYPO3_ROOT%/}
+
+worktree_folder=$(basename $DDEV_APPROOT)
+
+if [[ -z "$worktree_folder" ]]; then
+	printf 'Unable to determine the current app folder name Pass it as the first argument.\n' >&2
+	exit 1
+fi
+
+# DDEV project names and hostnames may only contain letters, numbers, and hyphens.
+worktree_folder="$(printf '%s' "$worktree_folder" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+
+if [[ -z "$worktree_folder" ]]; then
+	printf 'The folder name does not contain any valid hostname characters.\n' >&2
+	exit 1
+fi
+
+for config in "$DDEV_TYPO3_ROOT"/config/sites/*/config.yaml; do
+	base_url="$(awk '
+		/^[[:space:]]*base:[[:space:]]*.*https:\/\/.*\.ddev\.site/ {
+			match($0, /https:\/\/[^'\'' ]+/)
+			url = substr($0, RSTART, RLENGTH)
+			gsub(/'\''/, "", url)
+			print url
+			exit
+		}
+	' "$config")"
+
+	if [[ -z "$base_url" ]]; then
+		printf 'Unable to find a DDEV development base URL in %s.\n' "$config" >&2
+		exit 1
+	fi
+
+	hostname="${base_url#https://}"
+	hostname="${hostname%%/*}"
+	hostname="${hostname%.ddev.site}"
+
+	case "$hostname" in
+		*.de | *.com)
+			hostname="${hostname%.*}-${worktree_folder}.${hostname##*.}"
+			;;
+		*)
+			hostname="${hostname}-${worktree_folder}"
+			;;
+	esac
+
+	output="$(dirname "$config")/config.worktree.local.yaml"
+	cat > "$output" <<EOF
+baseVariants:
+  -
+    base: 'https://${hostname}.${DDEV_TLD}/'
+    condition: 'applicationContext == "${TYPO3_CONTEXT}"'
+EOF
+
+	printf 'Generated %s for worktree %s.\n' "$output" "$worktree_folder"
+done

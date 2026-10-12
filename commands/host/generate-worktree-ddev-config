@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Generate worktree-specific DDEV project and hostname configuration.
+## Usage: generate-worktree-ddev-config [worktree-folder-name]
+## Example: "ddev generate-worktree-ddev-config my-folder"
+## MutagenSync: true
+
+set -euo pipefail
+
+config="$DDEV_APPROOT/.ddev/config.yaml"
+output="$DDEV_APPROOT/.ddev/config.local.yaml"
+worktree_folder=$(basename $DDEV_APPROOT)
+
+if [[ -z "$worktree_folder" ]]; then
+	printf 'Unable to determine the current app folder name Pass it as the first argument.\n' >&2
+	exit 1
+fi
+
+# DDEV project names and hostnames may only contain letters, numbers, and hyphens.
+worktree_folder="$(printf '%s' "$worktree_folder" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+
+if [[ -z "$worktree_folder" ]]; then
+	printf 'The folder name does not contain any valid hostname characters.\n' >&2
+	exit 1
+fi
+
+project_name="$(awk '
+	/^name:[[:space:]]*/ {
+		sub(/^name:[[:space:]]*/, "")
+		sub(/[[:space:]]+#.*$/, "")
+		print
+		exit
+	}
+' "$config")"
+
+if [[ -z "$project_name" ]]; then
+	printf 'Unable to find the project name in %s.\n' "$config" >&2
+	exit 1
+fi
+
+{
+	printf 'override_config: true\nname: %s-%s\nadditional_hostnames:\n' "$project_name" "$worktree_folder"
+
+	while IFS= read -r hostname; do
+		case "$hostname" in
+			*.de | *.com)
+				hostname="${hostname%.*}-${worktree_folder}.${hostname##*.}"
+				;;
+			*)
+				hostname="${hostname}-${worktree_folder}"
+				;;
+		esac
+
+		printf '    - %s\n' "$hostname"
+	done < <(awk '
+		/^additional_hostnames:[[:space:]]*$/ { collecting = 1; next }
+		collecting && /^[[:space:]]*-[[:space:]]*/ {
+			sub(/^[[:space:]]*-[[:space:]]*/, "")
+			sub(/[[:space:]]+#.*$/, "")
+			print
+			next
+		}
+		collecting { exit }
+	' "$config")
+} > "$output"
+
+printf 'Generated %s for worktree %s.\n' "$output" "$worktree_folder"
